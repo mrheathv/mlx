@@ -94,7 +94,7 @@ actor BackendProcessManager {
             for await line in reader.lines() {
                 guard let data = line.data(using: .utf8) else { continue }
                 if let event = try? JSONDecoder().decode(BackendEvent.self, from: data) {
-                    self?.eventsContinuation?.yield(event)
+                    await self?.yieldEvent(event)
                 }
             }
         }
@@ -123,6 +123,10 @@ actor BackendProcessManager {
         eventsContinuation?.finish()
         eventsContinuation = nil
         events = nil
+    }
+
+    private func yieldEvent(_ event: BackendEvent) {
+        eventsContinuation?.yield(event)
     }
 
     private func handleTermination(status: Int32) {
