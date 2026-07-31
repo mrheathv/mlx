@@ -19,6 +19,7 @@ actor BackendProcessManager {
     /// point at a bundled venv + copy of `backend/` inside the .app.
     struct Configuration {
         var pythonExecutable: URL
+        var extraArguments: [String]
         var backendModuleDirectory: URL
         var moduleName: String = "mlxstudio_backend"
 
@@ -29,8 +30,25 @@ actor BackendProcessManager {
                 .deletingLastPathComponent() // Sources/
                 .deletingLastPathComponent() // repo root
                 .appendingPathComponent("backend", isDirectory: true)
+
+            // Prefer `backend/.venv` (see README "Setting up the Python
+            // backend") over whatever `python3` happens to be on PATH.
+            // This matters because launching via Xcode's Run button
+            // doesn't inherit a Terminal shell's PATH/activated venv the
+            // way `swift run` from a terminal does — resolving the venv's
+            // interpreter directly makes the app work the same either way.
+            let venvPython = backendDir.appendingPathComponent(".venv/bin/python3")
+            if FileManager.default.isExecutableFile(atPath: venvPython.path) {
+                return Configuration(
+                    pythonExecutable: venvPython,
+                    extraArguments: [],
+                    backendModuleDirectory: backendDir
+                )
+            }
+
             return Configuration(
                 pythonExecutable: URL(fileURLWithPath: "/usr/bin/env"),
+                extraArguments: ["python3"],
                 backendModuleDirectory: backendDir
             )
         }
@@ -64,7 +82,7 @@ actor BackendProcessManager {
 
         let process = Process()
         process.executableURL = configuration.pythonExecutable
-        process.arguments = ["python3", "-m", configuration.moduleName]
+        process.arguments = configuration.extraArguments + ["-m", configuration.moduleName]
         process.currentDirectoryURL = configuration.backendModuleDirectory
 
         let stdinPipe = Pipe()
