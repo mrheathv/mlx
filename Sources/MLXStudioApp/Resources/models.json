@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "generatedFrom": "backend/mlxstudio_backend/models.py (keep in sync manually for v1 — see ARCHITECTURE.md §2/§6)",
+  "models": [
+    {
+      "id": "flux1-schnell-4bit",
+      "displayName": "FLUX.1 [schnell] — Fast",
+      "tier": "fast",
+      "engine": "mflux",
+      "family": "flux1",
+      "hfRepo": "madroid/flux.1-schnell-mflux-4bit",
+      "fallbackHfRepo": "dhairyashil/FLUX.1-schnell-mflux-4bit",
+      "approxDownloadGB": 7.0,
+      "approxRuntimeRAMGB": 11.0,
+      "supportsGuidanceScale": false,
+      "defaultSteps": 4,
+      "maxRecommendedSteps": 8,
+      "defaultGuidance": 1.0,
+      "defaultWidth": 1024,
+      "defaultHeight": 1024
+    },
+    {
+      "id": "flux1-dev-4bit",
+      "displayName": "FLUX.1 [dev] — Quality",
+      "tier": "quality",
+      "engine": "mflux",
+      "family": "flux1",
+      "hfRepo": "madroid/flux.1-dev-mflux-4bit",
+      "fallbackHfRepo": "AITRADER/FLUX1-dev-mlx-4bit",
+      "approxDownloadGB": 7.0,
+      "approxRuntimeRAMGB": 11.5,
+      "supportsGuidanceScale": true,
+      "defaultSteps": 25,
+      "maxRecommendedSteps": 40,
+      "defaultGuidance": 3.5,
+      "defaultWidth": 1024,
+      "defaultHeight": 1024
+    },
+    {
+      "id": "sd35-large-4bit",
+      "displayName": "Stable Diffusion 3.5 Large — Alt",
+      "tier": "alternate",
+      "engine": "diffusionkit",
+      "family": "sd35",
+      "hfRepo": "argmaxinc/mlx-stable-diffusion-3.5-large-4bit-quantized",
+      "fallbackHfRepo": null,
+      "approxDownloadGB": 5.0,
+      "approxRuntimeRAMGB": 9.0,
+      "supportsGuidanceScale": true,
+      "defaultSteps": 28,
+      "maxRecommendedSteps": 50,
+      "defaultGuidance": 4.5,
+      "defaultWidth": 1024,
+      "defaultHeight": 1024
+    }
+  ]
+}

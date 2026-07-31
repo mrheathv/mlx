@@ -1,0 +1,27 @@
+[project]
+name = "mlxstudio-backend"
+version = "0.1.0"
+description = "Local MLX inference backend for MLX Studio (spoken to over stdio JSON-lines by the SwiftUI app)"
+requires-python = ">=3.11"
+dependencies = [
+    # MLX itself and the two model-implementation projects this backend
+    # wraps — see ARCHITECTURE.md §1 for why these and not a Swift/mlx-swift
+    # implementation. Pinned rather than left floating, since both are
+    # actively evolving (mflux) or unmaintained (diffusionkit, archived
+    # March 2026) and an unpinned bump could silently change generation
+    # behavior or break the engine wrappers' assumed API surface.
+    "mlx>=0.22",
+    "mflux==0.18.0",
+    "diffusionkit==0.5.2",
+    "huggingface_hub>=0.25",
+    "psutil>=6.0",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

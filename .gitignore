@@ -1,0 +1,13 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+*.xcodeproj
+
+# Python
+backend/.venv/
+backend/**/__pycache__/
+*.pyc
+.pytest_cache/
+
+# macOS
+.DS_Store
