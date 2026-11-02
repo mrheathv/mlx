@@ -1,9 +1,0 @@
-mlx>=0.22
-mflux==0.18.0
-diffusionkit==0.5.2
-huggingface_hub>=0.25
-psutil>=6.0
-pillow>=10.0
-
-[dev]
-pytest>=8.0
