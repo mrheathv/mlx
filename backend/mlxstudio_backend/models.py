@@ -1,15 +1,14 @@
 """The model registry: authoritative source of which checkpoints exist and
-how to run them. Swift's `Resources/models.json` is a hand-synced mirror of
-this for UI display before the backend is even running (see
-ARCHITECTURE.md §2/§6 — auto-generating that file from this one is flagged
-as tech debt, not done yet).
+how to run them. Swift's `Resources/models.json` mirrors it for the UI
+(`tests/test_models_registry.py` fails if the two drift apart).
 
-Every checkpoint here is a pre-quantized mflux-format repo whose parameter
-layout was verified against the pinned mflux 0.18.0 (ARCHITECTURE.md §2
-describes how). That check matters because mflux applies stored weights
-with `strict=False`: a checkpoint saved by an mflux version with a
-different module layout would load without error and generate noise.
-Don't swap in a different repo without re-running that check.
+Every checkpoint is a pre-quantized mflux-format repo. mflux applies stored
+weights with `strict=False`, so a checkpoint whose parameter names don't
+match the installed mflux would load without error and generate noise.
+Two defenses (ARCHITECTURE.md §2): the module layouts of every mflux
+version that could have saved these checkpoints were diffed against the
+pinned 0.24.0 and found identical, and `checkpoint_check` re-verifies the
+actual files at load time.
 """
 from __future__ import annotations
 
@@ -22,57 +21,60 @@ class ModelSpec:
     display_name: str
     tier: str  # "fast" | "quality" | "alternate"
     engine: str  # "mflux"
-    family: str  # "flux1" | "z_image"
+    family: str  # "flux2_klein" | "z_image"
+    # Name of the mflux ModelConfig factory (`ModelConfig.<name>()`). Saved
+    # checkpoints don't record which variant they are, so it's declared here.
+    mflux_config: str
     hf_repo: str
     approx_download_gb: float
     approx_runtime_ram_gb: float
     supports_guidance_scale: bool
+    supports_negative_prompt: bool
     default_steps: int
     max_recommended_steps: int
     default_guidance: float
     default_width: int
     default_height: int
-    # mflux ModelConfig to pair with the weights ("schnell"/"dev"); the
-    # saved checkpoint doesn't record which FLUX.1 variant it is.
-    mflux_base: str | None = None
 
 
 MODEL_REGISTRY: dict[str, ModelSpec] = {
     spec.id: spec
     for spec in [
         ModelSpec(
-            id="flux1-schnell-4bit",
-            display_name="FLUX.1 [schnell] — Fast",
+            id="flux2-klein-4b-4bit",
+            display_name="FLUX.2 [klein] 4B — Fast",
             tier="fast",
             engine="mflux",
-            family="flux1",
-            hf_repo="dhairyashil/FLUX.1-schnell-mflux-v0.6.2-4bit",
-            approx_download_gb=9.5,
-            approx_runtime_ram_gb=13.0,
+            family="flux2_klein",
+            mflux_config="flux2_klein_4b",
+            hf_repo="Runpod/FLUX.2-klein-4B-mflux-4bit",
+            approx_download_gb=4.8,
+            approx_runtime_ram_gb=8.0,
             supports_guidance_scale=False,
+            supports_negative_prompt=False,
             default_steps=4,
             max_recommended_steps=8,
             default_guidance=1.0,
             default_width=1024,
             default_height=1024,
-            mflux_base="schnell",
         ),
         ModelSpec(
-            id="flux1-dev-4bit",
-            display_name="FLUX.1 [dev] — Quality",
+            id="flux2-klein-9b-4bit",
+            display_name="FLUX.2 [klein] 9B — Quality",
             tier="quality",
             engine="mflux",
-            family="flux1",
-            hf_repo="dhairyashil/FLUX.1-dev-mflux-4bit",
-            approx_download_gb=9.5,
-            approx_runtime_ram_gb=13.5,
-            supports_guidance_scale=True,
-            default_steps=25,
-            max_recommended_steps=40,
-            default_guidance=3.5,
+            family="flux2_klein",
+            mflux_config="flux2_klein_9b",
+            hf_repo="mlx-community/flux2-klein-9b-4bit",
+            approx_download_gb=10.0,
+            approx_runtime_ram_gb=13.0,
+            supports_guidance_scale=False,
+            supports_negative_prompt=False,
+            default_steps=4,
+            max_recommended_steps=8,
+            default_guidance=1.0,
             default_width=1024,
             default_height=1024,
-            mflux_base="dev",
         ),
         ModelSpec(
             id="z-image-turbo-4bit",
@@ -80,10 +82,12 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
             tier="alternate",
             engine="mflux",
             family="z_image",
+            mflux_config="z_image_turbo",
             hf_repo="filipstrand/Z-Image-Turbo-mflux-4bit",
             approx_download_gb=5.9,
             approx_runtime_ram_gb=9.0,
             supports_guidance_scale=False,
+            supports_negative_prompt=False,
             default_steps=9,
             max_recommended_steps=16,
             default_guidance=0.0,

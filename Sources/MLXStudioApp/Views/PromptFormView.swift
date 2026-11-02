@@ -22,7 +22,9 @@ struct PromptFormView: View {
                                 .allowsHitTesting(false)
                         }
                     }
-                TextField("Negative prompt (optional)", text: $generationViewModel.negativePrompt)
+                if modelManager.selectedModel?.supportsNegativePrompt ?? false {
+                    TextField("Negative prompt (optional)", text: $generationViewModel.negativePrompt)
+                }
             }
 
             Section("Parameters") {

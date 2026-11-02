@@ -7,7 +7,7 @@ from mlxstudio_backend import protocol
 
 def test_parse_generate_command_round_trips_all_fields():
     line = json.dumps({
-        "type": "generate", "id": "abc-123", "model": "flux1-schnell-4bit",
+        "type": "generate", "id": "abc-123", "model": "flux2-klein-4b-4bit",
         "prompt": "a cat", "negative_prompt": "", "steps": 4, "guidance": 1.0,
         "seed": 42, "width": 1024, "height": 1024, "batch_size": 1,
         "output_dir": "/tmp/out",
@@ -15,7 +15,7 @@ def test_parse_generate_command_round_trips_all_fields():
     command = protocol.parse_command(line)
     assert isinstance(command, protocol.GenerateCommand)
     assert command.id == "abc-123"
-    assert command.model == "flux1-schnell-4bit"
+    assert command.model == "flux2-klein-4b-4bit"
     assert command.steps == 4
     assert command.seed == 42
 

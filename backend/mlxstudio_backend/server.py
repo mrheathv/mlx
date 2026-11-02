@@ -36,6 +36,10 @@ class GenerationCancelled(Exception):
     pass
 
 
+def _log(message: str) -> None:
+    print(f"[mlxstudio_backend] {message}", file=sys.stderr, flush=True)
+
+
 def _engine_for(engine_name: str) -> InferenceEngine:
     if engine_name == "mflux":
         return MfluxEngine()
@@ -105,7 +109,9 @@ class Server:
                         self._active_engine = None
                         self._active_model_id = None
                     engine = _engine_for(spec.engine)
+                    load_start = time.monotonic()
                     engine.load(spec, weights_dir)
+                    _log(f"loaded {spec.id} in {time.monotonic() - load_start:.1f}s")
                     self._active_engine = engine
                     self._active_model_id = spec.id
 
@@ -139,6 +145,12 @@ class Server:
             self._cancel_events.pop(cmd.id, None)
 
         elapsed = time.monotonic() - start
+        # Per-step time is the number to watch for thermal throttling on a
+        # fanless Mac: it climbs across back-to-back images as clocks drop.
+        _log(
+            f"generated {len(images)} image(s) with {spec.id} at {cmd.width}x{cmd.height}, "
+            f"{cmd.steps} steps: {elapsed:.1f}s ({elapsed / max(1, cmd.steps * len(images)):.2f} s/step)"
+        )
         emit(protocol.result_event(
             cmd.id,
             [{"path": str(img.path), "seed": img.seed} for img in images],

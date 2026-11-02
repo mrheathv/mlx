@@ -24,6 +24,7 @@ struct ModelDescriptor: Codable, Identifiable, Hashable {
     let approxDownloadGB: Double
     let approxRuntimeRAMGB: Double
     let supportsGuidanceScale: Bool
+    let supportsNegativePrompt: Bool
     let defaultSteps: Int
     let maxRecommendedSteps: Int
     let defaultGuidance: Double

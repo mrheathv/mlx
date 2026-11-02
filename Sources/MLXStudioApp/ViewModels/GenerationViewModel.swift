@@ -70,7 +70,7 @@ final class GenerationViewModel: ObservableObject {
         let request = GenerationRequest(
             modelId: model.id,
             prompt: prompt,
-            negativePrompt: negativePrompt,
+            negativePrompt: model.supportsNegativePrompt ? negativePrompt : "",
             parameters: parameters
         )
         activeRequestId = request.id

@@ -70,7 +70,7 @@ def protocol_decode(line: str) -> dict:
 
 def make_server(tmp_path, monkeypatch, engine):
     srv = server_module.Server(weights_cache_root=tmp_path / "models")
-    weights_dir = srv.weights_dir("flux1-schnell-4bit")
+    weights_dir = srv.weights_dir("flux2-klein-4b-4bit")
     weights_dir.mkdir(parents=True)
     (weights_dir / "config.json").write_text("{}")
     (weights_dir / server_module.DOWNLOAD_COMPLETE_MARKER).touch()
@@ -84,7 +84,7 @@ def test_generate_emits_loading_progress_and_result(tmp_path, monkeypatch, colle
     srv = make_server(tmp_path, monkeypatch, engine)
 
     cmd = protocol.GenerateCommand(
-        id="req-1", model="flux1-schnell-4bit", prompt="a cat", negative_prompt="",
+        id="req-1", model="flux2-klein-4b-4bit", prompt="a cat", negative_prompt="",
         steps=2, guidance=1.0, seed=7, width=64, height=64, batch_size=1,
         output_dir=str(tmp_path / "out"),
     )
@@ -93,7 +93,7 @@ def test_generate_emits_loading_progress_and_result(tmp_path, monkeypatch, colle
     types = [e["type"] for e in events]
     assert types == ["model_loading", "progress", "progress", "result"]
     assert events[-1]["images"] == [{"path": str(tmp_path / "out" / "fake.png"), "seed": 7}]
-    assert engine.loaded_with[0] == "flux1-schnell-4bit"
+    assert engine.loaded_with[0] == "flux2-klein-4b-4bit"
 
 
 def test_second_generate_with_same_model_skips_reload(tmp_path, monkeypatch, collected_events):
@@ -101,7 +101,7 @@ def test_second_generate_with_same_model_skips_reload(tmp_path, monkeypatch, col
     engine = FakeEngine()
     srv = make_server(tmp_path, monkeypatch, engine)
     cmd = protocol.GenerateCommand(
-        id="req-1", model="flux1-schnell-4bit", prompt="a cat", negative_prompt="",
+        id="req-1", model="flux2-klein-4b-4bit", prompt="a cat", negative_prompt="",
         steps=2, guidance=1.0, seed=7, width=64, height=64, batch_size=1,
         output_dir=str(tmp_path / "out"),
     )
@@ -109,7 +109,7 @@ def test_second_generate_with_same_model_skips_reload(tmp_path, monkeypatch, col
     events.clear()
 
     cmd2 = protocol.GenerateCommand(
-        id="req-2", model="flux1-schnell-4bit", prompt="another cat", negative_prompt="",
+        id="req-2", model="flux2-klein-4b-4bit", prompt="another cat", negative_prompt="",
         steps=2, guidance=1.0, seed=8, width=64, height=64, batch_size=1,
         output_dir=str(tmp_path / "out"),
     )
@@ -139,7 +139,7 @@ def test_generate_not_downloaded_emits_error(tmp_path, monkeypatch, collected_ev
     events, emit = collected_events
     srv = server_module.Server(weights_cache_root=tmp_path / "models")  # weights dir never created
     cmd = protocol.GenerateCommand(
-        id="req-1", model="flux1-schnell-4bit", prompt="x", negative_prompt="",
+        id="req-1", model="flux2-klein-4b-4bit", prompt="x", negative_prompt="",
         steps=1, guidance=1.0, seed=1, width=64, height=64, batch_size=1,
         output_dir=str(tmp_path / "out"),
     )
@@ -154,7 +154,7 @@ def test_cancel_stops_generation_before_completion(tmp_path, monkeypatch, collec
     engine = HangingEngine()
     srv = make_server(tmp_path, monkeypatch, engine)
     cmd = protocol.GenerateCommand(
-        id="req-1", model="flux1-schnell-4bit", prompt="x", negative_prompt="",
+        id="req-1", model="flux2-klein-4b-4bit", prompt="x", negative_prompt="",
         steps=1, guidance=1.0, seed=1, width=64, height=64, batch_size=1,
         output_dir=str(tmp_path / "out"),
     )
@@ -193,11 +193,11 @@ def test_download_success_writes_completion_marker(tmp_path, monkeypatch, collec
 
     monkeypatch.setattr(downloader, "download", fake_download)
 
-    srv.handle(protocol.DownloadCommand(id="dl-1", model="flux1-schnell-4bit"), emit)
+    srv.handle(protocol.DownloadCommand(id="dl-1", model="flux2-klein-4b-4bit"), emit)
 
-    assert calls == ["dhairyashil/FLUX.1-schnell-mflux-v0.6.2-4bit"]
+    assert calls == ["Runpod/FLUX.2-klein-4B-mflux-4bit"]
     assert [e["type"] for e in events] == ["download_progress", "download_progress", "download_complete"]
-    assert (srv.weights_dir("flux1-schnell-4bit") / server_module.DOWNLOAD_COMPLETE_MARKER).exists()
+    assert (srv.weights_dir("flux2-klein-4b-4bit") / server_module.DOWNLOAD_COMPLETE_MARKER).exists()
 
 
 def test_download_failure_emits_error_and_leaves_no_marker(tmp_path, monkeypatch, collected_events):
@@ -221,12 +221,12 @@ def test_download_failure_emits_error_and_leaves_no_marker(tmp_path, monkeypatch
 def test_partial_download_is_not_treated_as_downloaded(tmp_path, monkeypatch, collected_events):
     events, emit = collected_events
     srv = server_module.Server(weights_cache_root=tmp_path / "models")
-    weights_dir = srv.weights_dir("flux1-schnell-4bit")
+    weights_dir = srv.weights_dir("flux2-klein-4b-4bit")
     weights_dir.mkdir(parents=True)
     (weights_dir / "partial.safetensors").write_bytes(b"x")  # files present, no marker
 
     cmd = protocol.GenerateCommand(
-        id="req-1", model="flux1-schnell-4bit", prompt="x", negative_prompt="",
+        id="req-1", model="flux2-klein-4b-4bit", prompt="x", negative_prompt="",
         steps=1, guidance=1.0, seed=1, width=64, height=64, batch_size=1,
         output_dir=str(tmp_path / "out"),
     )

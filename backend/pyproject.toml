@@ -9,15 +9,14 @@ description = "Local MLX inference backend for MLX Studio (spoken to over stdio 
 requires-python = ">=3.11"
 dependencies = [
     # mflux is pinned exactly: engines/mflux_engine.py is written against
-    # 0.18.0's source, and the checkpoints in models.py were verified
+    # 0.24.0's source, and the checkpoints in models.py were verified
     # against its parameter layout. Bumping it means re-checking both.
-    "mflux==0.18.0",
-    "mlx>=0.29",
+    "mflux==0.24.0",
+    # 0.30 is the first MLX with kernels for the M5 GPU's Neural
+    # Accelerators (used on macOS 26.2+). mflux 0.24 itself needs >=0.32.
+    "mlx>=0.30",
     "huggingface_hub>=0.25",
     "psutil>=6.0",
-    # Pillow 13.0.0 does `from numbers import _IntegralLike`, which fails
-    # on Python 3.11-3.13 and breaks `import mflux` outright.
-    "pillow>=10,<13",
 ]
 
 [project.optional-dependencies]

@@ -17,7 +17,7 @@ import sys
 import threading
 from typing import TextIO
 
-from . import protocol
+from . import diagnostics, protocol
 from .server import Server
 
 _stdout_lock = threading.Lock()
@@ -38,6 +38,7 @@ def main() -> None:
 
     emit = make_emit(protocol_out)
     server = Server()
+    print(f"[mlxstudio_backend] {diagnostics.runtime_report()}", file=sys.stderr, flush=True)
     emit(protocol.ready_event())
 
     for raw_line in sys.stdin:

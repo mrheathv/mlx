@@ -10,14 +10,14 @@ SWIFT_CATALOG = Path(__file__).resolve().parents[2] / "Sources" / "MLXStudioApp"
 
 def test_registry_has_the_three_models():
     assert set(MODEL_REGISTRY.keys()) == {
-        "flux1-schnell-4bit", "flux1-dev-4bit", "z-image-turbo-4bit",
+        "flux2-klein-4b-4bit", "flux2-klein-9b-4bit", "z-image-turbo-4bit",
     }
 
 
 def test_tiers_are_distinct_and_expected():
     tiers = {spec_id: spec.tier for spec_id, spec in MODEL_REGISTRY.items()}
-    assert tiers["flux1-schnell-4bit"] == "fast"
-    assert tiers["flux1-dev-4bit"] == "quality"
+    assert tiers["flux2-klein-4b-4bit"] == "fast"
+    assert tiers["flux2-klein-9b-4bit"] == "quality"
     assert tiers["z-image-turbo-4bit"] == "alternate"
 
 
@@ -25,9 +25,10 @@ def test_all_models_run_on_mflux():
     assert {spec.engine for spec in MODEL_REGISTRY.values()} == {"mflux"}
 
 
-def test_flux_models_declare_their_mflux_base_config():
-    assert MODEL_REGISTRY["flux1-schnell-4bit"].mflux_base == "schnell"
-    assert MODEL_REGISTRY["flux1-dev-4bit"].mflux_base == "dev"
+def test_each_model_names_its_mflux_config():
+    assert MODEL_REGISTRY["flux2-klein-4b-4bit"].mflux_config == "flux2_klein_4b"
+    assert MODEL_REGISTRY["flux2-klein-9b-4bit"].mflux_config == "flux2_klein_9b"
+    assert MODEL_REGISTRY["z-image-turbo-4bit"].mflux_config == "z_image_turbo"
 
 
 def test_every_model_declares_a_positive_memory_footprint():
@@ -38,9 +39,12 @@ def test_every_model_declares_a_positive_memory_footprint():
         assert spec.approx_runtime_ram_gb >= spec.approx_download_gb
 
 
-def test_distilled_models_have_no_guidance_scale():
-    assert MODEL_REGISTRY["flux1-schnell-4bit"].supports_guidance_scale is False
-    assert MODEL_REGISTRY["z-image-turbo-4bit"].supports_guidance_scale is False
+def test_distilled_models_take_neither_guidance_nor_negative_prompts():
+    # FLUX.2 klein's generate_image has no negative_prompt parameter, and
+    # all three are guidance-distilled; passing either would error or no-op.
+    for spec in MODEL_REGISTRY.values():
+        assert spec.supports_guidance_scale is False
+        assert spec.supports_negative_prompt is False
 
 
 def test_get_model_returns_spec():
@@ -63,6 +67,7 @@ def test_get_model_raises_for_unknown_id():
         ("approx_download_gb", "approxDownloadGB"),
         ("approx_runtime_ram_gb", "approxRuntimeRAMGB"),
         ("supports_guidance_scale", "supportsGuidanceScale"),
+        ("supports_negative_prompt", "supportsNegativePrompt"),
         ("default_steps", "defaultSteps"),
         ("max_recommended_steps", "maxRecommendedSteps"),
         ("default_guidance", "defaultGuidance"),

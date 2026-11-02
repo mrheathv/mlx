@@ -1,9 +1,9 @@
 # MLX Studio — Architecture
 
 Native macOS SwiftUI app for local text-to-image generation on Apple
-Silicon using MLX, with three switchable models (FLUX.1 schnell, FLUX.1
-dev, Z-Image Turbo), generation history, and on-demand model downloads.
-No cloud inference, ever.
+Silicon using MLX, with three switchable models (FLUX.2 [klein] 4B,
+FLUX.2 [klein] 9B, Z-Image Turbo), generation history, and on-demand model
+downloads. No cloud inference, ever.
 
 Target hardware for dev/test: MacBook Air, M5, 24GB unified memory, fanless.
 Every design choice below is made against that ceiling, not against a Mac
@@ -18,23 +18,50 @@ stdin/stdout.** The Swift app never does inference math itself.
 ### Why not `mlx-swift` bindings directly
 
 `mlx-swift` (the array library) is solid, but the *model implementations*
-we need — FLUX.1's rectified-flow transformer, Z-Image's single-stream DiT,
-their T5/CLIP/Qwen3 text encoders and VAEs — don't exist in maintained
-Swift form.
+we need — FLUX.2's transformer, Z-Image's single-stream DiT, their Qwen3
+text encoders and VAEs — don't exist in maintained Swift form.
 
 | Project | Language | Status for our models |
 |---|---|---|
 | `ml-explore/mlx-swift-examples` | Swift | Has a Stable Diffusion example (SD1.x/SDXL-class UNet). No FLUX, no Z-Image. |
-| `argmaxinc/DiffusionKit` | Python + Swift | Archived March 2026. Swift MLX side never finished. Python side pins `mlx==0.17.3` (see §2). |
-| `filipstrand/mflux` | Python | Actively maintained. FLUX.1, FLUX.2, Z-Image, Qwen-Image and more, with quantization. **Used.** |
+| `argmaxinc/DiffusionKit` | Python + Swift | Archived March 2026. Python side pins `mlx==0.17.3`. |
+| `mflux-community/mflux` | Python | Actively maintained; 15+ model families incl. FLUX.2, FLUX 3, Z-Image, Krea 2, Qwen-Image 2.1. **Used.** |
 | `flux-2-swift-mlx`, `mlx-flux2`, `flux.swift` | Swift | Individual projects, partial coverage, thin testing. |
 
-Porting two diffusion architectures plus their text encoders and VAEs to
-Swift, and keeping up with upstream fixes, is months of work with a nasty
-failure mode: subtle mistakes (attention masking, VAE scaling) degrade
-images instead of crashing. Depending on `mflux` reuses an implementation
-that's already correct and maintained, and keeps the Swift layer what it
-should be: a thin native UI and persistence layer.
+Porting diffusion architectures plus their text encoders and VAEs to Swift,
+and keeping up with upstream fixes, is months of work with a nasty failure
+mode: subtle mistakes (attention masking, VAE scaling) degrade images
+instead of crashing. Depending on `mflux` reuses an implementation that's
+already correct and maintained.
+
+### Why not Core ML / the Apple Neural Engine
+
+The brief ruled out Core ML conversion pipelines, and the hardware agrees:
+
+- On the M5, the hardware that accelerates these models is the **Neural
+  Accelerators built into each GPU core**, not the separate Neural Engine
+  (ANE). MLX uses them from v0.30 on: its Metal backend has dedicated
+  "NAX" kernels for matrix multiplies, attention, and quantized matmuls
+  with scales and biases — exactly what our 4-bit models run. Verified in
+  MLX's source (`is_nax_available()` in `mlx/backend/metal/device.cpp`):
+  they're used when macOS is 26.2+ and the GPU architecture generation is
+  17+ (M5). Only MLX's macOS 26 build (`mlx-metal` wheel tagged
+  `macosx_26_0`) contains them; `uv` installs that build on macOS 26.
+  Apple's machine-learning research blog reports FLUX running over 3.8×
+  faster on M5 than M4 with this path.
+- The ANE is reached only through Core ML, which needs each model converted
+  ahead of time, works best on fixed shapes and convolution-heavy networks
+  (Apple's own Core ML Stable Diffusion port targets the SD1.x/SDXL UNet),
+  and falls back to GPU/CPU for unsupported ops. Multi-billion-parameter
+  diffusion transformers with large attention and LLM text encoders are a
+  poor fit, and every new model would need its own conversion pipeline.
+
+So the app doesn't target the ANE, but it does use the M5's neural
+hardware — provided MLX ≥ 0.30 and macOS ≥ 26.2. Because that can't be
+verified from a Linux build environment, the backend logs it on every
+start (`diagnostics.py`, mirroring MLX's rule), e.g.
+`M5 Neural Accelerators: ACTIVE`, or which condition failed. It also logs
+seconds-per-step for every generation.
 
 ### Why a pipe, not a local socket
 
@@ -42,13 +69,12 @@ should be: a thin native UI and persistence layer.
 - Only the parent process can reach the backend — there is no listening
   address at all.
 - Message rate is low (a few progress ticks per second) and payloads are
-  small: images are written to disk by Python and referenced by path,
-  never sent through the pipe.
+  small: images are written to disk by Python and referenced by path.
 
 Trade-offs accepted:
 
 - The app needs a Python 3.11 environment with `mlx` and `mflux`. The
-  packaged app provisions it itself on first launch (§5); about 1 GB.
+  packaged app provisions it itself on first launch (§5).
 - One more process that can crash independently of the UI.
   `BackendProcessManager` routes events per request; if the process
   exits, every in-flight request fails with `backend_exited` (including
@@ -65,56 +91,72 @@ Trade-offs accepted:
 Only one model is resident at a time; switching unloads the current one
 first (the UI shows "Loading model…", distinct from "Generating…").
 
-| Role | Model | Checkpoint | On disk | Est. runtime RAM | Defaults |
-|---|---|---|---|---|---|
-| Fast | FLUX.1 [schnell], 4-bit | `dhairyashil/FLUX.1-schnell-mflux-v0.6.2-4bit` | ~9.5 GB | ~13 GB | 4 steps, no CFG |
-| Quality | FLUX.1 [dev], 4-bit | `dhairyashil/FLUX.1-dev-mflux-4bit` | ~9.5 GB | ~13.5 GB | 25 steps, guidance 3.5 |
-| Alternate architecture | Z-Image Turbo, 4-bit | `filipstrand/Z-Image-Turbo-mflux-4bit` (by mflux's author) | ~5.9 GB | ~9 GB | 9 steps, no CFG |
+| Role | Model | Released | Checkpoint (4-bit, mflux format) | Download | Est. runtime RAM | Steps |
+|---|---|---|---|---|---|---|
+| Fast | FLUX.2 [klein] 4B | Jan 2026 | `Runpod/FLUX.2-klein-4B-mflux-4bit` | ~4.8 GB | ~8 GB | 4 |
+| Quality | FLUX.2 [klein] 9B | Jan 2026 | `mlx-community/flux2-klein-9b-4bit` | ~10 GB | ~13 GB | 4 |
+| Alternate architecture | Z-Image Turbo | Nov 2025 | `filipstrand/Z-Image-Turbo-mflux-4bit` (by mflux's author) | ~5.9 GB | ~9 GB | 9 |
 
-Runtime RAM figures are estimates used by the memory warning (§4), not
-measurements; they need confirming on the M5.
+Download and RAM figures are estimates from parameter counts and mflux's
+published measurements, used by the memory warning (§4); they need
+confirming on the M5. All three are guidance-distilled, so the UI hides
+the guidance slider and negative prompt (FLUX.2 klein's `generate_image`
+doesn't take a negative prompt at all).
 
-### Why Z-Image Turbo instead of Stable Diffusion 3.5
+Licensing: Black Forest Labs releases klein 4B under Apache 2.0 and klein
+9B under the FLUX Non-Commercial License. Check the Z-Image Turbo model
+card for its terms before any commercial use.
 
-The original brief asked for SD3.5 as the third model. Its only MLX
-implementation is DiffusionKit, which hard-pins `mlx==0.17.3`; `mflux`
-0.18 needs `mlx` 0.29.3. They can't share one Python environment (found
-by resolving both for macOS arm64 with `uv pip compile`). Running SD3.5
-in a second environment would double setup size and add a second IPC
-hop, and whether mlx 0.17 works on an M5 at all is unknown. Z-Image Turbo
-is a different architecture from FLUX (a 6B single-stream DiT with a
-Qwen3 text encoder), runs on the same `mflux`, and is smaller.
+### Why this lineup
+
+mflux's own model table calls FLUX.1 (Aug 2024) a "legacy option". For a
+fanless 24GB machine the deciding factors are memory and step count (heat
+per image): klein runs in 4 steps at under ~8 GB (4B) / ~13 GB (9B), versus
+FLUX.1 [dev]'s 12B parameters and 25 steps. Considered and not chosen as
+defaults:
+
+- **FLUX 3 Image Klein** (Oct 2026, newest from BFL; strongest text
+  rendering): 16 steps, ~18 GB peak measured at 4-bit before mflux's
+  lower-memory VAE decode — worth adding once measured on the M5.
+- **Krea 2 Turbo** (Jun 2026, 12B, 8 steps): good style range; bigger.
+- **Qwen-Image 2.1**: 27 GB peak even at 8-bit — too big for 24 GB.
+
+Stable Diffusion 3.5 (in the original brief) was dropped earlier: its only
+MLX implementation, DiffusionKit, pins `mlx==0.17.3`, which can't share an
+environment with mflux (and would forgo the M5 Neural Accelerators).
 
 ### How the checkpoints were verified
 
 mflux loads stored weights with `module.update(weights, strict=False)`.
-If a checkpoint was saved by an mflux version whose module names differ
-from the installed one, nothing errors — the weights simply don't apply
-and the model generates noise. So each checkpoint was checked against
-the pinned mflux 0.18.0 by building both versions' model trees with MLX's
-lazy initialization (no weights allocated), applying 4-bit quantization
-with each version's own predicate, and diffing every parameter name and
-shape:
+If a checkpoint was saved with a module layout that differs from the
+installed mflux, nothing errors — the weights simply don't apply and the
+model generates noise. Two defenses:
 
-- FLUX.1 schnell/dev saved by mflux **0.6.2** vs 0.18.0: every parameter
-  0.18 needs is present with an identical shape (including quantized
-  `scales`/`biases`); one extra key (`norm_out.linear.bias`) is ignored.
-  Both `dhairyashil` repos state they were made with 0.6.2. The
-  `madroid` repos considered earlier don't say which version saved them,
-  so they were dropped.
-- Z-Image Turbo saved by mflux **≥0.13** vs 0.18.0: identical trees.
+1. **Layout diff across versions.** Each model's module tree was built with
+   MLX's lazy initialization (no weights allocated) in every mflux version
+   that could have saved these checkpoints, quantized to 4 bits with that
+   version's predicate, and every parameter name and shape diffed against
+   the pinned 0.24.0: FLUX.2 klein 4B and 9B as built by 0.16.0 (the first
+   version with klein) and 0.18.0, and Z-Image Turbo as built by 0.13.0 —
+   all identical. So any mflux-saved checkpoint of these models loads
+   correctly.
+2. **Load-time check** (`checkpoint_check.py`). Hugging Face is
+   unreachable from the build environment, so the specific repos' files
+   couldn't be inspected. Instead, after building a model the engine reads
+   the tensor names from each checkpoint file's safetensors header and
+   compares them with the parameters the model expects. A mismatch raises
+   a clear "would generate noise" error instead of producing garbage. This
+   check was exercised against mflux 0.24's real FLUX.2 klein module tree,
+   with a matching checkpoint and with one tensor renamed.
 
-`mflux` is pinned to exactly 0.18.0 in `backend/pyproject.toml`; changing
-it means redoing this check. The engine (`engines/mflux_engine.py`) was
-written against 0.18.0's source rather than docs, and its import paths,
-`generate_image` keyword arguments and callback hookup were exercised
-against that real code with heavy dependencies stubbed.
-
-Also pinned: `pillow<13`. Pillow 13.0.0 does `from numbers import
-_IntegralLike`, which fails on Python 3.11–3.13 and breaks `import mflux`.
+`mflux` is pinned to exactly 0.24.0 in `backend/pyproject.toml`. The engine
+(`engines/mflux_engine.py`) was written against 0.24.0's source; its import
+paths, per-model `generate_image` arguments, image saving and step-callback
+hookup were exercised against that real code with heavy dependencies
+stubbed.
 
 The registry lives in `backend/mlxstudio_backend/models.py` (authoritative)
-and is mirrored for the UI in `Sources/MLXStudioApp/Resources/models.json`.
+and is mirrored for the UI in `Sources/MLXStudioApp/Resources/models.json`;
 `backend/tests/test_models_registry.py` fails if the two disagree.
 
 ## 3. Swift app structure
@@ -147,7 +189,7 @@ Sources/MLXStudioApp/
     BackendSetupView.swift         first-run setup screen
     ContentView.swift              sidebar: Generate / Gallery
     ModelPickerView.swift          segmented control + download state
-    PromptFormView.swift           prompt, negative prompt, parameters
+    PromptFormView.swift           prompt and the parameters the model supports
     GenerationProgressView.swift   per-step progress or spinner + elapsed time
     GalleryView.swift
     GenerationDetailView.swift     metadata + "Reuse Settings"
@@ -191,11 +233,12 @@ not downloaded and resumes (already-fetched files are reused) when retried.
 - **Memory**: `MemoryGuard` reads free + inactive pages via
   `host_statistics64` and compares them with the model's estimate plus a
   4 GB reserve for macOS and the app. A shortfall shows a warning with an
-  informed "Try Anyway", never a silent hang. How MLX/Metal behaves at the
-  edge on a 24GB M5 still needs observing on the hardware.
+  informed "Try Anyway", never a silent hang.
 - **No active cooling**: the UI never promises a duration. It shows steps
   and elapsed time. Batches run sequentially, so a throttled image late in
-  a batch doesn't hold back earlier ones.
+  a batch doesn't hold back earlier ones. The lineup favors low step
+  counts, and the backend log records seconds-per-step per generation so
+  throttling across back-to-back images is visible.
 
 ## 5. Packaging and first run
 
@@ -223,40 +266,41 @@ screen and runs the bundled `uv`:
    under `~/Library/Application Support/MLXStudio/python-installs`, venv at
    `…/python-env`.
 2. `uv pip install -r Resources/backend/pyproject.toml` → MLX, mflux and
-   their pinned dependencies.
+   their pinned dependencies (on macOS 26, the Neural-Accelerator build of
+   MLX).
 
 The environment counts as installed only while a saved copy of the
 `pyproject.toml` it was built from matches the bundled one, so an app
-update that changes dependencies re-runs setup. The backend runs with
-`PYTHONPYCACHEPREFIX` pointed at `~/Library/Caches/MLXStudio`, so nothing
-writes into the signed bundle.
+update that changes dependencies (like this mflux upgrade) re-runs setup.
+The backend runs with `PYTHONPYCACHEPREFIX` pointed at
+`~/Library/Caches/MLXStudio`, so nothing writes into the signed bundle.
 
 Logs go to `~/Library/Logs/MLXStudio/` (`setup.log`, `backend.log`;
-Help → Show Logs in Finder). A packaged app has no terminal, so this is
-where Python tracebacks end up.
+Help → Show Logs in Finder).
 
 Under `swift run`/Xcode the app skips all of this and runs the backend
 from the repo's `backend/` directory, preferring `backend/.venv`.
 
 ## 6. Risks and unverified areas
 
-- **Not yet run on Apple Silicon.** This was developed in a Linux
-  container. Verified there: the backend's protocol, registry, dispatch,
-  cancellation and download handling (46 pytest tests, mflux mocked);
-  the dependency set resolving for macOS arm64; the exact `uv` commands
-  the setup screen runs; checkpoint parameter layouts and the engine's
-  calls against real mflux 0.18 code. Not verified: compiling the Swift
-  code, real generation, Metal memory behavior. The Swift side did
-  compile on the M5 at an earlier commit; the files changed since then
-  are compiled for the first time by `build-dmg.sh`.
-- **Checkpoints are community uploads** (the FLUX ones) or the mflux
-  author's (Z-Image). Structure was verified; image quality wasn't.
+- **Not yet generating on Apple Silicon.** Developed in a Linux container.
+  Verified there: backend protocol/registry/dispatch/cancellation/download
+  handling and the checkpoint and diagnostics logic (64 pytest tests,
+  mflux mocked); the dependency set resolving for macOS arm64; the exact
+  `uv` setup commands; checkpoint layouts and the engine's calls against
+  real mflux 0.24 code. Not verified: real generation, actual Neural
+  Accelerator use, memory and thermal behavior — the startup and
+  per-generation log lines exist to measure those on the M5.
+- **Checkpoint repos weren't inspected directly** (Hugging Face is blocked
+  from the build environment); the load-time check covers this.
 - **Memory estimates** in the registry are reasoned, not measured.
 
 ## 7. Out of scope (future work)
 
 From the brief: image-to-image, inpainting, outpainting, ControlNet/LoRA,
 upscaling, iCloud sync, and any network feature beyond model downloads.
-Also deferred: an app icon, Developer ID signing/notarization, keeping
-more than one model resident, and generating `models.json` from the Python
+FLUX.2 klein supports image editing, which makes it a natural base for
+image-to-image later. Also deferred: FLUX 3 Image Klein as an option once
+measured, an app icon, Developer ID signing/notarization, keeping more
+than one model resident, and generating `models.json` from the Python
 registry at build time (a test keeps them in sync for now).

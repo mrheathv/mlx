@@ -14,7 +14,7 @@ final class ModelCatalogTests: XCTestCase {
     func testBundledCatalogIdsMatchPythonRegistry() throws {
         let catalog = try ModelCatalog.loadBundled()
         let ids = Set(catalog.models.map(\.id))
-        XCTAssertEqual(ids, ["flux1-schnell-4bit", "flux1-dev-4bit", "z-image-turbo-4bit"])
+        XCTAssertEqual(ids, ["flux2-klein-4b-4bit", "flux2-klein-9b-4bit", "z-image-turbo-4bit"])
     }
 
     func testExactlyOneModelPerTier() throws {
@@ -23,9 +23,11 @@ final class ModelCatalogTests: XCTestCase {
         XCTAssertEqual(Set(tiers).count, 3, "expected one fast / one quality / one alternate model")
     }
 
-    func testSchnellDoesNotSupportGuidanceScale() throws {
+    func testDistilledModelsHideGuidanceAndNegativePrompt() throws {
         let catalog = try ModelCatalog.loadBundled()
-        let schnell = try XCTUnwrap(catalog.models.first { $0.id == "flux1-schnell-4bit" })
-        XCTAssertFalse(schnell.supportsGuidanceScale)
+        for model in catalog.models {
+            XCTAssertFalse(model.supportsGuidanceScale, model.id)
+            XCTAssertFalse(model.supportsNegativePrompt, model.id)
+        }
     }
 }

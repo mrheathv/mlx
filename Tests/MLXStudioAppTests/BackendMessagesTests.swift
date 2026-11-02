@@ -8,7 +8,7 @@ import XCTest
 final class BackendMessagesTests: XCTestCase {
     func testGenerateCommandEncodesExpectedFields() throws {
         let request = GenerationRequest(
-            modelId: "flux1-schnell-4bit",
+            modelId: "flux2-klein-4b-4bit",
             prompt: "a cat",
             negativePrompt: "blurry",
             parameters: GenerationParameters(
@@ -22,7 +22,7 @@ final class BackendMessagesTests: XCTestCase {
 
         let json = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(json["type"] as? String, "generate")
-        XCTAssertEqual(json["model"] as? String, "flux1-schnell-4bit")
+        XCTAssertEqual(json["model"] as? String, "flux2-klein-4b-4bit")
         XCTAssertEqual(json["prompt"] as? String, "a cat")
         XCTAssertEqual(json["negative_prompt"] as? String, "blurry")
         XCTAssertEqual(json["steps"] as? Int, 4)

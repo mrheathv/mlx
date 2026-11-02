@@ -29,8 +29,8 @@ final class HistoryStoreTests: XCTestCase {
             id: UUID(),
             batchId: UUID(),
             createdAt: Date(),
-            modelId: "flux1-schnell-4bit",
-            modelDisplayName: "FLUX.1 [schnell] — Fast",
+            modelId: "flux2-klein-4b-4bit",
+            modelDisplayName: "FLUX.2 [klein] 4B — Fast",
             prompt: "a cat wearing sunglasses",
             negativePrompt: "",
             parameters: GenerationParameters(
@@ -89,7 +89,7 @@ final class HistoryStoreTests: XCTestCase {
 
         let reloaded = try HistoryStore(rootDirectory: tempRoot)
         XCTAssertEqual(reloaded.all().count, 1)
-        XCTAssertEqual(reloaded.all().first?.modelId, "flux1-schnell-4bit")
+        XCTAssertEqual(reloaded.all().first?.modelId, "flux2-klein-4b-4bit")
     }
 
     func testAsReusableRequestLocksSeedToTheOneActuallyUsed() throws {

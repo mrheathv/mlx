@@ -25,9 +25,10 @@ final class GenerationParametersTests: XCTestCase {
 
     func testDefaultsForModelUsesModelDescriptorDefaults() {
         let model = ModelDescriptor(
-            id: "flux1-schnell-4bit", displayName: "FLUX.1 [schnell]", tier: .fast,
-            engine: .mflux, family: "flux1", hfRepo: "x/y",
-            approxDownloadGB: 7, approxRuntimeRAMGB: 11, supportsGuidanceScale: false,
+            id: "flux2-klein-4b-4bit", displayName: "FLUX.2 [klein] 4B", tier: .fast,
+            engine: .mflux, family: "flux2_klein", hfRepo: "x/y",
+            approxDownloadGB: 4.8, approxRuntimeRAMGB: 8, supportsGuidanceScale: false,
+            supportsNegativePrompt: false,
             defaultSteps: 4, maxRecommendedSteps: 8, defaultGuidance: 1.0,
             defaultWidth: 1024, defaultHeight: 1024
         )

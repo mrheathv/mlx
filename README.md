@@ -1,13 +1,14 @@
 # MLX Studio
 
 A native macOS SwiftUI app for local, on-device image generation on Apple
-Silicon, with three switchable models — FLUX.1 [schnell], FLUX.1 [dev] and
-Z-Image Turbo — all running through MLX. No cloud calls beyond downloading
+Silicon, with three switchable models — FLUX.2 [klein] 4B, FLUX.2 [klein] 9B
+and Z-Image Turbo — all running through MLX on the GPU (using the M5's GPU
+Neural Accelerators on macOS 26.2+). No cloud calls beyond downloading
 Python packages and model weights.
 
 See **[ARCHITECTURE.md](ARCHITECTURE.md)** for the design: why a Python/MLX
 child process instead of `mlx-swift`, how the checkpoints were chosen and
-verified, why Z-Image Turbo replaced Stable Diffusion 3.5, and what's still
+verified, why not Core ML / the Neural Engine, and what's still
 unverified.
 
 ## Build a DMG and install it
@@ -29,13 +30,15 @@ Homebrew or a virtualenv:
    downloads its own Python 3.11 and the MLX libraries (roughly 1 GB) into
    `~/Library/Application Support/MLXStudio/`.
 2. **Pick a model** and click **Download** the first time you use it
-   (FLUX.1 models ~9.5 GB each, Z-Image Turbo ~5.9 GB). Z-Image Turbo is the
-   smallest and a good first test.
+   (FLUX.2 [klein] 4B ~4.8 GB, Z-Image Turbo ~5.9 GB, FLUX.2 [klein] 9B ~10 GB).
+   klein 4B is the smallest and fastest — a good first test.
 3. **Generate.**
 
 If something fails, **Help → Show Logs in Finder** opens
 `~/Library/Logs/MLXStudio/` — `setup.log` and `backend.log` contain the
-details (Python tracebacks included).
+details (Python tracebacks included). The first lines of `backend.log` after
+each launch say whether the M5 GPU Neural Accelerators are in use, and every
+generation logs its seconds per step.
 
 The DMG is ad-hoc signed, which is fine on the Mac that built it. If you
 copy it to another Mac, open the app there with right-click → **Open** the
@@ -84,9 +87,9 @@ scripts/build-dmg.sh          builds dist/MLX Studio.app and the DMG
 
 | Model | Role | Download | Est. runtime RAM |
 |---|---|---|---|
-| FLUX.1 [schnell], 4-bit | fast iteration | ~9.5 GB | ~13 GB |
-| FLUX.1 [dev], 4-bit | final quality | ~9.5 GB | ~13.5 GB |
-| Z-Image Turbo, 4-bit | alternate architecture | ~5.9 GB | ~9 GB |
+| FLUX.2 [klein] 4B, 4-bit | fast iteration (4 steps) | ~4.8 GB | ~8 GB |
+| FLUX.2 [klein] 9B, 4-bit | final quality (4 steps; non-commercial license) | ~10 GB | ~13 GB |
+| Z-Image Turbo, 4-bit | alternate architecture (9 steps) | ~5.9 GB | ~9 GB |
 
 One model is resident at a time. Models live in
 `~/Library/Application Support/MLXStudio/models/`; generated images and
