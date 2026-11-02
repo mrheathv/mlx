@@ -13,7 +13,6 @@ struct ModelDescriptor: Codable, Identifiable, Hashable {
 
     enum Engine: String, Codable {
         case mflux
-        case diffusionkit
     }
 
     let id: String
@@ -22,7 +21,6 @@ struct ModelDescriptor: Codable, Identifiable, Hashable {
     let engine: Engine
     let family: String
     let hfRepo: String
-    let fallbackHfRepo: String?
     let approxDownloadGB: Double
     let approxRuntimeRAMGB: Double
     let supportsGuidanceScale: Bool
@@ -37,8 +35,14 @@ struct ModelCatalog: Codable {
     let schemaVersion: Int
     let models: [ModelDescriptor]
 
+    /// Packaged .app: `scripts/build-dmg.sh` copies models.json into
+    /// Contents/Resources. SwiftPM's `Bundle.module` would instead look for
+    /// its resource bundle at the .app's root, where nothing can be placed
+    /// without breaking the code signature — so it's only the fallback,
+    /// for `swift run`.
     static func loadBundled() throws -> ModelCatalog {
-        guard let url = Bundle.module.url(forResource: "models", withExtension: "json") else {
+        guard let url = Bundle.main.url(forResource: "models", withExtension: "json")
+            ?? Bundle.module.url(forResource: "models", withExtension: "json") else {
             throw CocoaError(.fileNoSuchFile)
         }
         let data = try Data(contentsOf: url)

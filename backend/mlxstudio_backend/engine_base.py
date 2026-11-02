@@ -1,6 +1,7 @@
-"""Common interface both diffusion backends (`mflux` for FLUX.1,
-`diffusionkit` for SD3.5) implement, so `server.py` doesn't need to know
-which engine is active beyond routing by `ModelSpec.engine`.
+"""Interface every inference engine implements, so `server.py` only
+routes by `ModelSpec.engine` and owns load/unload/cancellation. Today the
+only engine is `mflux` (engines/mflux_engine.py); the seam also lets the
+server tests run with fake engines, since mflux needs Apple Silicon.
 """
 from __future__ import annotations
 

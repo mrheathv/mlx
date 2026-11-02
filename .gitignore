@@ -12,3 +12,6 @@ backend/**/__pycache__/
 # macOS
 .DS_Store
 backend/*.egg-info/
+
+# DMG build output
+dist/

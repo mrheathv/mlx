@@ -1,261 +1,262 @@
 # MLX Studio — Architecture
 
-Native macOS SwiftUI app for local text-to-image generation on Apple Silicon
-using MLX, with switchable FLUX / Stable Diffusion 3.5 models, generation
-history, and on-demand model downloads. No cloud inference, ever.
+Native macOS SwiftUI app for local text-to-image generation on Apple
+Silicon using MLX, with three switchable models (FLUX.1 schnell, FLUX.1
+dev, Z-Image Turbo), generation history, and on-demand model downloads.
+No cloud inference, ever.
 
 Target hardware for dev/test: MacBook Air, M5, 24GB unified memory, fanless.
 Every design choice below is made against that ceiling, not against a Mac
 Studio with 128GB and active cooling.
 
-## 1. Inference backend: bundled Python/MLX process, not mlx-swift bindings
+## 1. Inference backend: Python/MLX child process, not mlx-swift bindings
 
-**Decision: shell out to a bundled Python subprocess that talks MLX
-directly, communicated with over newline-delimited JSON on stdin/stdout.**
-The Swift app never does inference math itself.
+**Decision: the Swift app runs a Python child process that does all
+inference through MLX, and talks to it with newline-delimited JSON on
+stdin/stdout.** The Swift app never does inference math itself.
 
 ### Why not `mlx-swift` bindings directly
 
-`mlx-swift` (the array/autograd library) is solid, but the *model
-implementations* we need — FLUX.1/FLUX.2's rectified-flow transformer, SD3.5's
-MMDiT, T5/CLIP/Qwen3 text encoders, VAEs — are not.
+`mlx-swift` (the array library) is solid, but the *model implementations*
+we need — FLUX.1's rectified-flow transformer, Z-Image's single-stream DiT,
+their T5/CLIP/Qwen3 text encoders and VAEs — don't exist in maintained
+Swift form.
 
-Researched as of 2026-07:
+| Project | Language | Status for our models |
+|---|---|---|
+| `ml-explore/mlx-swift-examples` | Swift | Has a Stable Diffusion example (SD1.x/SDXL-class UNet). No FLUX, no Z-Image. |
+| `argmaxinc/DiffusionKit` | Python + Swift | Archived March 2026. Swift MLX side never finished. Python side pins `mlx==0.17.3` (see §2). |
+| `filipstrand/mflux` | Python | Actively maintained. FLUX.1, FLUX.2, Z-Image, Qwen-Image and more, with quantization. **Used.** |
+| `flux-2-swift-mlx`, `mlx-flux2`, `flux.swift` | Swift | Individual projects, partial coverage, thin testing. |
 
-| Project | Language | FLUX | SD3.5 | Status |
-|---|---|---|---|---|
-| `ml-explore/mlx-swift-examples` | Swift (mlx-swift) | not present | has a `StableDiffusionExample` (SD1.x/SDXL-class UNet only, no MMDiT) | actively maintained, but doesn't cover our models |
-| `argmaxinc/DiffusionKit` | Python (MLX) + Swift (Core ML, mlx-swift "under construction") | ✅ FLUX.1 schnell/dev | ✅ SD3/SD3.5 | **archived March 2026**, Python side works and is what we use; Swift side was never finished |
-| `filipstrand/mflux` | Python (MLX) | ✅ FLUX.1 + full FLUX.2 family, actively supported | ❌ not supported | actively maintained, broad model + quantization support |
-| `VincentGourbin/flux-2-swift-mlx`, `scf4/mlx-flux2`, `flux.swift` | Swift (mlx-swift) | partial FLUX.2 | none | individual/community projects, not production-grade, thin test coverage |
+Porting two diffusion architectures plus their text encoders and VAEs to
+Swift, and keeping up with upstream fixes, is months of work with a nasty
+failure mode: subtle mistakes (attention masking, VAE scaling) degrade
+images instead of crashing. Depending on `mflux` reuses an implementation
+that's already correct and maintained, and keeps the Swift layer what it
+should be: a thin native UI and persistence layer.
 
-There is no single actively-maintained Swift/mlx-swift implementation that
-covers FLUX **and** SD3.5. Building and maintaining our own Swift ports of
-two different diffusion transformer architectures (rectified-flow FLUX,
-MMDiT SD3.5), their text encoders (T5-XXL, CLIP-L/G, Qwen3 for FLUX.2 klein),
-and their VAEs — plus keeping up with upstream fixes — is a multi-month
-undertaking with real correctness risk (subtly wrong attention masking or
-VAE scaling silently degrades image quality rather than crashing). That's
-effort spent re-deriving what `mflux` and `diffusionkit` already got right
-and keep patching, for zero product benefit.
-
-Shelling out to Python lets the app depend on the two projects that already
-do this correctly and are updated as BFL/Stability ship new checkpoints,
-while the Swift layer stays what it should be: a thin, fast, native UI and
-persistence layer.
-
-### Why a subprocess pipe, not a local socket
-
-Newline-delimited JSON over the child process's own `stdin`/`stdout` pipes,
-not a TCP or Unix-domain socket:
+### Why a pipe, not a local socket
 
 - No port allocation, no socket file lifecycle, nothing to clean up on crash.
-- The process is *only* reachable by its parent (`Process`/`NSTask`) by
-  construction — there is no listening address at all, which is a stronger
-  version of "no network calls" than "a localhost socket nobody else happens
-  to connect to."
-- Our message rate is low (a handful of progress ticks per second at most,
-  plus start/end-of-generation events) and payloads are small — images are
-  written to disk by the Python side and referenced by path, never
-  base64-encoded through the pipe. A socket's extra complexity (framing,
-  reconnect logic, port conflicts) buys nothing here.
+- Only the parent process can reach the backend — there is no listening
+  address at all.
+- Message rate is low (a few progress ticks per second) and payloads are
+  small: images are written to disk by Python and referenced by path,
+  never sent through the pipe.
 
-Trade-offs accepted with this design, called out explicitly:
+Trade-offs accepted:
 
-- The app must bundle or provision a Python 3.11+ environment with `mlx`,
-  `mflux`, and `diffusionkit` installed. This is real packaging work (see
-  §5) and adds ~1–2GB to install size. Mitigation: use `uv` to materialize a
-  project-local virtualenv on first launch rather than shipping a frozen
-  interpreter in the `.app` bundle for v1; revisit embedding a
-  `python-build-standalone` interpreter directly in the bundle once the app
-  is otherwise stable.
-- One extra process boundary means one more thing that can crash
-  independently of the UI. Mitigation: `BackendProcessManager` treats the
-  backend as supervised — a dead process is detected (EOF on stdout) and
-  surfaced as a recoverable error, not an app crash, with a restart action.
-- The backend process is kept warm (not spawned per-request) specifically
-  so a loaded model's weights stay resident in unified memory across
-  consecutive generations — reloading a 4-bit FLUX checkpoint from disk
-  takes real time (many seconds) that we don't want to pay per image.
+- The app needs a Python 3.11 environment with `mlx` and `mflux`. The
+  packaged app provisions it itself on first launch (§5); about 1 GB.
+- One more process that can crash independently of the UI.
+  `BackendProcessManager` routes events per request; if the process
+  exits, every in-flight request fails with `backend_exited` (including
+  the last line the process wrote to stderr) instead of hanging, and the
+  next request starts a fresh process.
+- The process is kept warm across generations so a loaded model stays
+  resident instead of being reloaded from disk per image.
+- Python's stdout is the protocol channel, so the backend points
+  `sys.stdout` at stderr at startup. Stray `print()`s from mflux land in
+  the log, not in the protocol stream.
 
-## 2. Models and checkpoints (verified, not assumed)
+## 2. Models and checkpoints
 
-Only one model is resident in the backend process at a time — with a 24GB
-budget shared with macOS, keeping two diffusion models loaded
-simultaneously is not viable. Switching models unloads the current one
-before loading the next; the UI shows this as a "Loading model…" state,
-distinct from "Generating…".
+Only one model is resident at a time; switching unloads the current one
+first (the UI shows "Loading model…", distinct from "Generating…").
 
-Memory figures below are the on-disk quantized weight size; resident RAM
-while generating is higher (activations, VAE, text encoder, MLX's own
-working buffers) — the app's memory guard (§4) budgets ~1.4–1.6x the
-on-disk weight size plus a fixed 4GB reserved for macOS + the app itself,
-and treats these as estimates to warn from, not hard cutoffs.
-
-| Role | Model | Checkpoint researched | Engine | On-disk size | Notes |
+| Role | Model | Checkpoint | On disk | Est. runtime RAM | Defaults |
 |---|---|---|---|---|---|
-| Fast/distilled | FLUX.1-schnell, 4-bit | `madroid/flux.1-schnell-mflux-4bit` (mflux-native format; `dhairyashil/FLUX.1-schnell-mflux-4bit` as fallback mirror) | `mflux` | ~7GB | 1–4 step distilled model, no CFG (guidance fixed at 1.0) — this is the "quick iteration" model |
-| Quality | FLUX.1-dev, 4-bit | `madroid/flux.1-dev-mflux-4bit` (mflux-native format; `AITRADER/FLUX1-dev-mlx-4bit` as fallback) | `mflux` | ~7GB (est., same transformer size as schnell) | full CFG, 20–30 steps typical, this is the "final render" model |
-| Alternate architecture | Stable Diffusion 3.5 Large, 4-bit | `argmaxinc/mlx-stable-diffusion-3.5-large-4bit-quantized` | `diffusionkit` (Python) | ~4.7–5GB | Large fits comfortably once quantized, so it beats Medium on quality for no memory penalty — chosen over Medium per the "whichever fits memory better" guidance in the brief |
+| Fast | FLUX.1 [schnell], 4-bit | `dhairyashil/FLUX.1-schnell-mflux-v0.6.2-4bit` | ~9.5 GB | ~13 GB | 4 steps, no CFG |
+| Quality | FLUX.1 [dev], 4-bit | `dhairyashil/FLUX.1-dev-mflux-4bit` | ~9.5 GB | ~13.5 GB | 25 steps, guidance 3.5 |
+| Alternate architecture | Z-Image Turbo, 4-bit | `filipstrand/Z-Image-Turbo-mflux-4bit` (by mflux's author) | ~5.9 GB | ~9 GB | 9 steps, no CFG |
 
-The registry is **not hardcoded as a single source of truth in two
-languages long-term** — see `backend/mlxstudio_backend/models.py` (Python,
-authoritative) and `Sources/MLXStudioApp/Resources/models.json` (Swift,
-generated copy for UI display without needing the backend running yet).
-Flagged as v1 tech debt in §6: a build step that generates the Swift JSON
-from the Python registry instead of hand-keeping both in sync.
+Runtime RAM figures are estimates used by the memory warning (§4), not
+measurements; they need confirming on the M5.
 
-FLUX.2 (klein/dev) was evaluated as the "fast" and "quality" tier
-respectively — `mflux` officially supports the FLUX.2 Klein family and it's
-the more actively-developed line — but FLUX.1 schnell/dev was chosen for
-v1 because pre-quantized, mflux-format checkpoints for FLUX.1 are more
-numerous and better battle-tested at time of writing. The model registry
-is a data file, not code, specifically so swapping in FLUX.2 checkpoints
-later (or when better-vetted quantized FLUX.2 mirrors show up) is a config
-change, not a rewrite.
+### Why Z-Image Turbo instead of Stable Diffusion 3.5
 
-**Everything in the table above was found via live search of Hugging Face
-in July 2026, not assumed from training knowledge** — repo names, formats,
-and file sizes in this space change often; the app treats the registry as
-swappable for exactly that reason.
+The original brief asked for SD3.5 as the third model. Its only MLX
+implementation is DiffusionKit, which hard-pins `mlx==0.17.3`; `mflux`
+0.18 needs `mlx` 0.29.3. They can't share one Python environment (found
+by resolving both for macOS arm64 with `uv pip compile`). Running SD3.5
+in a second environment would double setup size and add a second IPC
+hop, and whether mlx 0.17 works on an M5 at all is unknown. Z-Image Turbo
+is a different architecture from FLUX (a 6B single-stream DiT with a
+Qwen3 text encoder), runs on the same `mflux`, and is smaller.
+
+### How the checkpoints were verified
+
+mflux loads stored weights with `module.update(weights, strict=False)`.
+If a checkpoint was saved by an mflux version whose module names differ
+from the installed one, nothing errors — the weights simply don't apply
+and the model generates noise. So each checkpoint was checked against
+the pinned mflux 0.18.0 by building both versions' model trees with MLX's
+lazy initialization (no weights allocated), applying 4-bit quantization
+with each version's own predicate, and diffing every parameter name and
+shape:
+
+- FLUX.1 schnell/dev saved by mflux **0.6.2** vs 0.18.0: every parameter
+  0.18 needs is present with an identical shape (including quantized
+  `scales`/`biases`); one extra key (`norm_out.linear.bias`) is ignored.
+  Both `dhairyashil` repos state they were made with 0.6.2. The
+  `madroid` repos considered earlier don't say which version saved them,
+  so they were dropped.
+- Z-Image Turbo saved by mflux **≥0.13** vs 0.18.0: identical trees.
+
+`mflux` is pinned to exactly 0.18.0 in `backend/pyproject.toml`; changing
+it means redoing this check. The engine (`engines/mflux_engine.py`) was
+written against 0.18.0's source rather than docs, and its import paths,
+`generate_image` keyword arguments and callback hookup were exercised
+against that real code with heavy dependencies stubbed.
+
+Also pinned: `pillow<13`. Pillow 13.0.0 does `from numbers import
+_IntegralLike`, which fails on Python 3.11–3.13 and breaks `import mflux`.
+
+The registry lives in `backend/mlxstudio_backend/models.py` (authoritative)
+and is mirrored for the UI in `Sources/MLXStudioApp/Resources/models.json`.
+`backend/tests/test_models_registry.py` fails if the two disagree.
 
 ## 3. Swift app structure
 
-Packaged as a Swift Package (`Package.swift`) with a macOS executable
-target using the SwiftUI `App` protocol, rather than a hand-authored
-`.xcodeproj`. Opens directly in Xcode (`File > Open...` on `Package.swift`)
-or builds with `swift build`/`swift run`. This keeps the project
-diffable/reviewable in plain text and avoids maintaining a generated
-`.pbxproj`, at the cost of a couple of Xcode conveniences (asset catalogs
-need `Bundle.module`, entitlements are wired via `Package.swift` plugin
-settings) — an acceptable trade for a project this size.
+A Swift Package (`Package.swift`) with a macOS executable target using the
+SwiftUI `App` lifecycle — diffable, no generated `.pbxproj`. Opens in Xcode
+via `Package.swift`, runs with `swift run`, and `scripts/build-dmg.sh`
+assembles it into a signed `.app` and DMG.
 
 ```
 Sources/MLXStudioApp/
-  App.swift                        @main App, wires environment objects
+  App.swift                        @main App; gates the UI on backend setup
   Models/
     GenerationParameters.swift     steps, guidance, seed, size, batch count
     GenerationRequest.swift        prompt + params + model id
     HistoryEntry.swift             persisted record of one generated image
-    ModelDescriptor.swift          registry entry (id, engine, repo, footprint)
-    BackendMessages.swift          Codable wire protocol (request/response/progress/error)
+    ModelDescriptor.swift          registry entry; loads models.json
+    BackendMessages.swift          Codable wire protocol
   Services/
-    BackendProcessManager.swift    spawns/supervises the Python subprocess
-    InferenceBackendClient.swift   line-buffered JSON-lines request/response + progress streams
-    ModelManager.swift             download orchestration, active-model state
-    MemoryGuard.swift              host_statistics64-based available RAM check
-    HistoryStore.swift             JSON index + file-backed image storage
+    BackendEnvironment.swift       first-run Python setup via bundled uv
+    BackendProcessManager.swift    runs/supervises the backend; per-request routing; LogFile
+    InferenceBackendClient.swift   typed generate/download update streams
+    ModelManager.swift             downloads, download-complete detection
+    MemoryGuard.swift              host_statistics64-based free RAM check
+    HistoryStore.swift             JSON index + image files on disk
   ViewModels/
-    GenerationViewModel.swift      drives the generate form + progress state
-    GalleryViewModel.swift         drives history browsing/reuse
+    GenerationViewModel.swift
+    GalleryViewModel.swift
   Views/
-    ContentView.swift              split view: generate / gallery
-    ModelPickerView.swift          segmented control across the 3 models
-    PromptFormView.swift           prompt, negative prompt, params
-    GenerationProgressView.swift   per-step progress bar or elapsed-time spinner
-    GalleryView.swift              grid of past generations
-    GenerationDetailView.swift     metadata detail + "reuse settings"
-    MemoryWarningView.swift        non-blocking warning sheet
+    BackendSetupView.swift         first-run setup screen
+    ContentView.swift              sidebar: Generate / Gallery
+    ModelPickerView.swift          segmented control + download state
+    PromptFormView.swift           prompt, negative prompt, parameters
+    GenerationProgressView.swift   per-step progress or spinner + elapsed time
+    GalleryView.swift
+    GenerationDetailView.swift     metadata + "Reuse Settings"
+    MemoryWarningView.swift
   Resources/
     models.json
 ```
 
 ### Data flow — generation
 
-1. `PromptFormView` edits a `GenerationRequest` bound in `GenerationViewModel`.
-2. On submit, `GenerationViewModel` asks `MemoryGuard` to check the selected
-   model's footprint against currently-free RAM; if short, shows
-   `MemoryWarningView` (proceed anyway / cancel) instead of continuing blind.
-3. `GenerationViewModel` calls `InferenceBackendClient.generate(request)`,
-   which lazily asks `BackendProcessManager` to ensure the subprocess is
-   running, then writes one JSON line (`{"type":"generate", "id", "model",
-   "prompt", "negative_prompt", "steps", "guidance", "seed", "width",
-   "height", "batch_size"}`) to its stdin.
-4. The backend loads the model (skipped if already the active model),
-   denoises, and streams `{"type":"progress","id","step","total_steps",
-   "elapsed_s"}` lines as they become available, then
-   `{"type":"result","id","images":[{"path","seed"}]}` or
-   `{"type":"error","id","code","message"}`.
-5. `InferenceBackendClient` demultiplexes lines by `id` (a `UUID` per
-   request) onto `AsyncStream`s the ViewModel consumes; progress updates a
-   `@Published` state driving `GenerationProgressView`, which shows
-   per-step progress when `total_steps` is known and falls back to an
-   indeterminate spinner + elapsed-time counter when it isn't (e.g. during
-   model load) — no hardcoded "should take N seconds" anywhere in the UI,
-   per the thermal-throttling constraint.
-6. On `result`, `GenerationViewModel` hands the image paths + full request
-   metadata to `HistoryStore.record(...)`, which copies the file(s) into
-   `Application Support/MLXStudio/Generations/` (if not already written
-   there by the backend) and appends a `HistoryEntry` to the JSON index.
-   `GalleryViewModel` observes the store and updates the grid.
+1. `PromptFormView` edits state in `GenerationViewModel`.
+2. On submit, `MemoryGuard` compares the model's estimated footprint with
+   free + inactive memory; if short, `MemoryWarningView` offers Cancel or
+   Try Anyway.
+3. `InferenceBackendClient.generate` asks `BackendProcessManager` to start
+   the process if needed, register for events with the request's `id`,
+   and write a `generate` command.
+4. The backend loads the model if it isn't already active (emitting
+   `model_loading`), then streams `progress` events from mflux's per-step
+   callback and finishes with `result` (image paths + seeds) or `error`.
+5. Progress drives `GenerationProgressView` — step N of M plus elapsed
+   time, never an ETA (see §4).
+6. On `result`, `HistoryStore` records each image with its full settings;
+   the gallery reads from the store.
+
+Cancel sends a `cancel` command; the backend's step callback raises on the
+next step, which mflux propagates out of `generate_image`.
 
 ### Data flow — model download
 
-`ModelManager.ensureDownloaded(modelId)` sends `{"type":"download","id",
-"model"}`; the backend uses `huggingface_hub`'s `snapshot_download` with a
-progress callback, streaming `{"type":"download_progress","id",
-"bytes_done","bytes_total"}` lines. The UI shows a determinate progress bar
-since Hugging Face reports content-length. Downloads are cached under
-`~/Library/Application Support/MLXStudio/models/<repo>/` and re-checked
-(not re-downloaded) on subsequent launches — `snapshot_download`'s own
-local-cache behavior handles this for free.
+`ModelManager` sends `download`; the backend runs `huggingface_hub`'s
+`snapshot_download` into `~/Library/Application Support/MLXStudio/models/<model id>/`
+and reports progress by polling bytes on disk against the repo's total
+size. Only after a complete download does it write a
+`.mlxstudio-download-complete` marker; both sides treat a model as
+downloaded only if the marker exists, so an interrupted download shows as
+not downloaded and resumes (already-fetched files are reused) when retried.
 
 ## 4. Handling the hardware constraints
 
-- **Memory**: `MemoryGuard` reads `ProcessInfo.processInfo.physicalMemory`
-  and free/inactive pages via `host_statistics64`, compares against the
-  selected model's declared footprint (registry) plus a fixed reserve for
-  macOS + the app (~4GB). Short-on-memory is a warning sheet with an
-  informed "try anyway" override, never a silent hang or a crash — actual
-  OOM behavior in MLX/Metal on a real 24GB M5 unit needs to be verified on
-  hardware (flagged in §6, this container has no Apple Silicon to test on).
-- **No active cooling / thermal throttling**: the UI never promises a
-  duration. Progress is step-based when the backend reports steps, elapsed
-  time always shown, batches process sequentially with per-image results
-  streamed back individually (so a throttled 5th image in a batch of 5
-  doesn't block the first four from already being visible in the gallery).
+- **Memory**: `MemoryGuard` reads free + inactive pages via
+  `host_statistics64` and compares them with the model's estimate plus a
+  4 GB reserve for macOS and the app. A shortfall shows a warning with an
+  informed "Try Anyway", never a silent hang. How MLX/Metal behaves at the
+  edge on a 24GB M5 still needs observing on the hardware.
+- **No active cooling**: the UI never promises a duration. It shows steps
+  and elapsed time. Batches run sequentially, so a throttled image late in
+  a batch doesn't hold back earlier ones.
 
-## 5. Model management & first-run
+## 5. Packaging and first run
 
-First selection of a not-yet-downloaded model shows a download sheet
-before enabling "Generate". `ModelManager` persists which models have
-completed download (checking the on-disk cache is authoritative; a local
-"download complete" flag is a cache of that, not the source of truth, so a
-partially-downloaded or manually-deleted model is re-detected rather than
-assumed present).
+`scripts/build-dmg.sh` (run on an Apple Silicon Mac) builds a release
+binary and assembles `MLX Studio.app`:
 
-## 6. Explicitly flagged risks / immature areas
+```
+MLX Studio.app/Contents/
+  MacOS/MLXStudio                  the SwiftUI app
+  MacOS/uv                         pinned uv release, checksum-verified
+  Resources/models.json
+  Resources/backend/               the Python backend's source + pyproject.toml
+  Info.plist
+```
 
-- **mlx-swift diffusion support is immature** for our target models (§1) —
-  this is the central reason for the subprocess architecture. Revisit if
-  `mlx-swift-examples` gains a maintained FLUX/SD3.5 implementation.
-- **DiffusionKit (Python) is archived** (March 2026). It still works and is
-  pinned to a specific released version, but receives no further fixes.
-  If it breaks against a future `mlx` release, the fallback is to drop the
-  SD3.5 tier or replace it with an `mflux`-supported alternative (e.g.
-  Z-Image or Qwen-Image) via the same swappable registry — not a rewrite.
-- **No per-step progress guarantee from every engine.** `mflux` exposes a
-  callback system (`callback.py`/`callback_manager.py`); `diffusionkit`'s
-  step-level reporting wasn't confirmed in this research pass. The wire
-  protocol and UI both already treat `progress` events as optional/best
-  effort (indeterminate spinner fallback), so this degrades gracefully
-  either way.
-- **Nothing in this repo has been built or run** — this development
-  container is Linux with no Swift toolchain and no Apple Silicon/Metal,
-  so neither the SwiftUI app nor the MLX Python backend can be compiled or
-  executed here. The Python backend's protocol/registry/memory-check logic
-  is unit-tested in this sandbox with the inference engines mocked out
-  (see `backend/tests/`); the Swift code compiles by inspection against
-  documented SwiftUI/Foundation APIs but is unverified by an actual build.
-  **This must be built and exercised on the target M5 MacBook Air before
-  being considered working software.**
+It ad-hoc signs the bundle and wraps it in a DMG with an Applications
+shortcut. Ad-hoc signing is enough on the Mac that built it; a copy moved
+to another Mac needs right-click → Open (or Developer ID signing and
+notarization, not done here).
 
-## 7. Out of scope for v1 (future work)
+Python is not bundled. On first launch `BackendEnvironment` shows a setup
+screen and runs the bundled `uv`:
 
-Per the brief: image-to-image, inpainting, outpainting, ControlNet/LoRA,
-upscaling, iCloud sync, and any cloud/network feature beyond the one-time
-model download. Also deferred: multi-model-resident-at-once, cancel
-mid-step (protocol has room for it via an `{"type":"cancel","id"}` message
-but it isn't wired up end-to-end in v1), and auto-generating
-`models.json` from the Python registry at build time (currently
-hand-synced, called out above as tech debt).
+1. `uv venv --python 3.11 --managed-python` → a uv-managed CPython 3.11
+   under `~/Library/Application Support/MLXStudio/python-installs`, venv at
+   `…/python-env`.
+2. `uv pip install -r Resources/backend/pyproject.toml` → MLX, mflux and
+   their pinned dependencies.
+
+The environment counts as installed only while a saved copy of the
+`pyproject.toml` it was built from matches the bundled one, so an app
+update that changes dependencies re-runs setup. The backend runs with
+`PYTHONPYCACHEPREFIX` pointed at `~/Library/Caches/MLXStudio`, so nothing
+writes into the signed bundle.
+
+Logs go to `~/Library/Logs/MLXStudio/` (`setup.log`, `backend.log`;
+Help → Show Logs in Finder). A packaged app has no terminal, so this is
+where Python tracebacks end up.
+
+Under `swift run`/Xcode the app skips all of this and runs the backend
+from the repo's `backend/` directory, preferring `backend/.venv`.
+
+## 6. Risks and unverified areas
+
+- **Not yet run on Apple Silicon.** This was developed in a Linux
+  container. Verified there: the backend's protocol, registry, dispatch,
+  cancellation and download handling (46 pytest tests, mflux mocked);
+  the dependency set resolving for macOS arm64; the exact `uv` commands
+  the setup screen runs; checkpoint parameter layouts and the engine's
+  calls against real mflux 0.18 code. Not verified: compiling the Swift
+  code, real generation, Metal memory behavior. The Swift side did
+  compile on the M5 at an earlier commit; the files changed since then
+  are compiled for the first time by `build-dmg.sh`.
+- **Checkpoints are community uploads** (the FLUX ones) or the mflux
+  author's (Z-Image). Structure was verified; image quality wasn't.
+- **Memory estimates** in the registry are reasoned, not measured.
+
+## 7. Out of scope (future work)
+
+From the brief: image-to-image, inpainting, outpainting, ControlNet/LoRA,
+upscaling, iCloud sync, and any network feature beyond model downloads.
+Also deferred: an app icon, Developer ID signing/notarization, keeping
+more than one model resident, and generating `models.json` from the Python
+registry at build time (a test keeps them in sync for now).

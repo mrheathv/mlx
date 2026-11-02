@@ -14,7 +14,7 @@ final class ModelCatalogTests: XCTestCase {
     func testBundledCatalogIdsMatchPythonRegistry() throws {
         let catalog = try ModelCatalog.loadBundled()
         let ids = Set(catalog.models.map(\.id))
-        XCTAssertEqual(ids, ["flux1-schnell-4bit", "flux1-dev-4bit", "sd35-large-4bit"])
+        XCTAssertEqual(ids, ["flux1-schnell-4bit", "flux1-dev-4bit", "z-image-turbo-4bit"])
     }
 
     func testExactlyOneModelPerTier() throws {

@@ -5,11 +5,17 @@ thread so a long-running `generate` doesn't block a subsequent `cancel`
 (or a `download` for a different model) from being read and handled, and
 writes JSON events to stdout as they happen. stdout writes are
 lock-guarded so two threads' events can never interleave mid-line.
+
+The real stdout is reserved for protocol events: `sys.stdout` is pointed
+at stderr before anything else runs, so `print()` calls inside mflux and
+its dependencies end up in the backend log instead of on the protocol
+channel.
 """
 from __future__ import annotations
 
 import sys
 import threading
+from typing import TextIO
 
 from . import protocol
 from .server import Server
@@ -17,17 +23,20 @@ from .server import Server
 _stdout_lock = threading.Lock()
 
 
-def make_emit():
+def make_emit(out: TextIO):
     def emit(line: str) -> None:
         with _stdout_lock:
-            sys.stdout.write(line)
-            sys.stdout.write("\n")
-            sys.stdout.flush()
+            out.write(line)
+            out.write("\n")
+            out.flush()
     return emit
 
 
 def main() -> None:
-    emit = make_emit()
+    protocol_out = sys.stdout
+    sys.stdout = sys.stderr
+
+    emit = make_emit(protocol_out)
     server = Server()
     emit(protocol.ready_event())
 

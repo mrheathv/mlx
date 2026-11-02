@@ -6,7 +6,8 @@ struct MLXStudioApp: App {
 
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .environmentObject(appEnvironment.backendEnvironment)
                 .environmentObject(appEnvironment.modelManager)
                 .environmentObject(appEnvironment.generationViewModel)
                 .environmentObject(appEnvironment.galleryViewModel)
@@ -14,6 +15,26 @@ struct MLXStudioApp: App {
                 .onAppear { appEnvironment.start() }
         }
         .windowResizability(.contentSize)
+        .commands {
+            CommandGroup(after: .help) {
+                Button("Show Logs in Finder") { LogFile.revealInFinder() }
+            }
+        }
+    }
+}
+
+private struct RootView: View {
+    @EnvironmentObject private var backendEnvironment: BackendEnvironment
+
+    var body: some View {
+        switch backendEnvironment.state {
+        case .ready:
+            ContentView()
+        case .checking:
+            ProgressView()
+        case .needsSetup, .installing, .failed:
+            BackendSetupView()
+        }
     }
 }
 
@@ -23,6 +44,7 @@ struct MLXStudioApp: App {
 /// construction order/dependencies.
 @MainActor
 final class AppEnvironment: ObservableObject {
+    let backendEnvironment: BackendEnvironment
     let client: InferenceBackendClient
     let historyStore: HistoryStore
     let modelManager: ModelManager
@@ -30,13 +52,21 @@ final class AppEnvironment: ObservableObject {
     let galleryViewModel: GalleryViewModel
 
     init() {
-        let client = InferenceBackendClient()
+        // A write to the backend's stdin after it has died must surface as
+        // a thrown EPIPE error, not a SIGPIPE that kills the whole app.
+        signal(SIGPIPE, SIG_IGN)
+
+        let paths = BackendEnvironment.Paths.forRunningApp()
+        let backendEnvironment = BackendEnvironment(paths: paths)
+        let processManager = BackendProcessManager(configuration: BackendEnvironment.backendConfiguration(paths: paths))
+        let client = InferenceBackendClient(processManager: processManager)
         guard let historyStore = try? HistoryStore() else {
             fatalError("Could not create ~/Library/Application Support/MLXStudio — the app cannot persist generations without it.")
         }
         let modelsCacheDirectory = historyStore.rootDirectory.appendingPathComponent("models", isDirectory: true)
         let modelManager = ModelManager(client: client, modelsCacheDirectory: modelsCacheDirectory)
 
+        self.backendEnvironment = backendEnvironment
         self.client = client
         self.historyStore = historyStore
         self.modelManager = modelManager
@@ -45,6 +75,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     func start() {
+        backendEnvironment.check()
         do {
             try modelManager.loadCatalog()
             generationViewModel.onModelSelected()

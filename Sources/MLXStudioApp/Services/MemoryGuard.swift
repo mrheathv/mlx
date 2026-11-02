@@ -10,7 +10,7 @@ import Darwin
 /// a snapshot (macOS reclaims/compresses pages continuously) and the
 /// per-model footprint in the registry is an estimate. `MemoryGuard` is
 /// meant to catch the common case ("you have a browser and Xcode open on a
-/// 24GB machine and picked the Large SD3.5 model") — see ARCHITECTURE.md §4
+/// 24GB machine and picked a FLUX.1 model") — see ARCHITECTURE.md §4
 /// for why this needs verification on real hardware.
 struct MemoryGuard {
     struct Assessment {

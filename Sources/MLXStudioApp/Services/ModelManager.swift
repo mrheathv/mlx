@@ -43,16 +43,17 @@ final class ModelManager: ObservableObject {
         }
     }
 
-    /// A model's cache directory existing and non-empty is treated as
-    /// "downloaded" — the backend's `snapshot_download` cache layout is
-    /// `<modelsCacheDirectory>/<repo-with-slashes-replaced>/`.
+    /// The backend downloads into `<modelsCacheDirectory>/<model id>/` and
+    /// writes this marker only once the download has fully completed
+    /// (`DOWNLOAD_COMPLETE_MARKER` in backend/mlxstudio_backend/server.py),
+    /// so an interrupted download shows as not downloaded and can be resumed.
+    static let downloadCompleteMarker = ".mlxstudio-download-complete"
+
     private func detectLocalState(for model: ModelDescriptor) -> DownloadState {
-        let dir = modelsCacheDirectory.appendingPathComponent(model.id, isDirectory: true)
-        var isDirectory: ObjCBool = false
-        let exists = FileManager.default.fileExists(atPath: dir.path, isDirectory: &isDirectory)
-        guard exists, isDirectory.boolValue else { return .notDownloaded }
-        let contents = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
-        return contents.isEmpty ? .notDownloaded : .ready
+        let marker = modelsCacheDirectory
+            .appendingPathComponent(model.id, isDirectory: true)
+            .appendingPathComponent(Self.downloadCompleteMarker)
+        return FileManager.default.fileExists(atPath: marker.path) ? .ready : .notDownloaded
     }
 
     func ensureDownloaded(_ model: ModelDescriptor) async {

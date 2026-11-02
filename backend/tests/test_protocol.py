@@ -21,9 +21,9 @@ def test_parse_generate_command_round_trips_all_fields():
 
 
 def test_parse_download_command():
-    line = json.dumps({"type": "download", "id": "x", "model": "sd35-large-4bit"})
+    line = json.dumps({"type": "download", "id": "x", "model": "z-image-turbo-4bit"})
     command = protocol.parse_command(line)
-    assert command == protocol.DownloadCommand(id="x", model="sd35-large-4bit")
+    assert command == protocol.DownloadCommand(id="x", model="z-image-turbo-4bit")
 
 
 def test_parse_cancel_command():

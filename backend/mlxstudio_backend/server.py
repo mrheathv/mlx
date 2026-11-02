@@ -21,11 +21,15 @@ from typing import Callable
 
 from . import downloader, memory, protocol
 from .engine_base import GenerationParams, InferenceEngine
-from .engines.flux_engine import FluxEngine
-from .engines.sd35_engine import SD35Engine
+from .engines.mflux_engine import MfluxEngine
 from .models import UnknownModelError, get_model
 
 Emit = Callable[[str], None]
+
+# Written only after a download finishes, so an interrupted download isn't
+# mistaken for a usable model. The Swift side (ModelManager) checks the
+# same filename.
+DOWNLOAD_COMPLETE_MARKER = ".mlxstudio-download-complete"
 
 
 class GenerationCancelled(Exception):
@@ -34,9 +38,7 @@ class GenerationCancelled(Exception):
 
 def _engine_for(engine_name: str) -> InferenceEngine:
     if engine_name == "mflux":
-        return FluxEngine()
-    if engine_name == "diffusionkit":
-        return SD35Engine()
+        return MfluxEngine()
     raise ValueError(f"Unknown engine: {engine_name}")
 
 
@@ -74,7 +76,7 @@ class Server:
             return
 
         weights_dir = self.weights_dir(spec.id)
-        if not weights_dir.exists() or not any(weights_dir.iterdir()):
+        if not (weights_dir / DOWNLOAD_COMPLETE_MARKER).exists():
             emit(protocol.error_event(
                 "model_not_downloaded",
                 f"{spec.display_name} has not been downloaded yet.",
@@ -159,23 +161,15 @@ class Server:
         def on_progress(done: int, total: int) -> None:
             emit(protocol.download_progress_event(cmd.id, done, total))
 
-        repos_to_try = [spec.hf_repo] + ([spec.fallback_hf_repo] if spec.fallback_hf_repo else [])
-        last_error: Exception | None = None
         try:
-            for repo_id in repos_to_try:
-                try:
-                    downloader.download(repo_id, destination, on_progress, cancel_event)
-                    last_error = None
-                    break
-                except downloader.DownloadError as exc:
-                    last_error = exc
-                    continue
-            if last_error is not None:
-                emit(protocol.error_event("download_failed", str(last_error), cmd.id))
-                return
+            downloader.download(spec.hf_repo, destination, on_progress, cancel_event)
+        except downloader.DownloadError as exc:
+            emit(protocol.error_event("download_failed", str(exc), cmd.id))
+            return
         finally:
             self._cancel_events.pop(cmd.id, None)
 
+        (destination / DOWNLOAD_COMPLETE_MARKER).touch()
         emit(protocol.download_complete_event(cmd.id))
 
     # -- cancel ---------------------------------------------------------

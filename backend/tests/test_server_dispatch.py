@@ -1,5 +1,5 @@
 """Exercises `Server` end to end with fake engines/downloads standing in
-for `mflux`/`diffusionkit`/network access — none of which are available in
+for `mflux`/network access — none of which are available in
 this sandbox (see ARCHITECTURE.md §6). This verifies the dispatch,
 event-emission, and cancellation plumbing that *is* testable without
 Apple Silicon; it does not verify real image generation.
@@ -73,6 +73,7 @@ def make_server(tmp_path, monkeypatch, engine):
     weights_dir = srv.weights_dir("flux1-schnell-4bit")
     weights_dir.mkdir(parents=True)
     (weights_dir / "config.json").write_text("{}")
+    (weights_dir / server_module.DOWNLOAD_COMPLETE_MARKER).touch()
     monkeypatch.setattr(server_module, "_engine_for", lambda name: engine)
     return srv
 
@@ -177,7 +178,7 @@ def test_cancel_stops_generation_before_completion(tmp_path, monkeypatch, collec
     assert events[-1]["code"] == "cancelled"
 
 
-def test_download_success_tries_primary_repo_only(tmp_path, monkeypatch, collected_events):
+def test_download_success_writes_completion_marker(tmp_path, monkeypatch, collected_events):
     events, emit = collected_events
     srv = server_module.Server(weights_cache_root=tmp_path / "models")
 
@@ -185,52 +186,50 @@ def test_download_success_tries_primary_repo_only(tmp_path, monkeypatch, collect
 
     def fake_download(repo_id, destination, on_progress, cancel_event):
         calls.append(repo_id)
+        destination.mkdir(parents=True, exist_ok=True)
         on_progress(50, 100)
         on_progress(100, 100)
         return downloader.DownloadResult(local_path=destination)
 
     monkeypatch.setattr(downloader, "download", fake_download)
 
-    cmd = protocol.DownloadCommand(id="dl-1", model="flux1-schnell-4bit")
-    srv.handle(cmd, emit)
+    srv.handle(protocol.DownloadCommand(id="dl-1", model="flux1-schnell-4bit"), emit)
 
-    assert calls == ["madroid/flux.1-schnell-mflux-4bit"]
+    assert calls == ["dhairyashil/FLUX.1-schnell-mflux-v0.6.2-4bit"]
     assert [e["type"] for e in events] == ["download_progress", "download_progress", "download_complete"]
+    assert (srv.weights_dir("flux1-schnell-4bit") / server_module.DOWNLOAD_COMPLETE_MARKER).exists()
 
 
-def test_download_falls_back_to_secondary_repo_on_failure(tmp_path, monkeypatch, collected_events):
+def test_download_failure_emits_error_and_leaves_no_marker(tmp_path, monkeypatch, collected_events):
     events, emit = collected_events
     srv = server_module.Server(weights_cache_root=tmp_path / "models")
 
-    calls = []
-
-    def fake_download(repo_id, destination, on_progress, cancel_event):
-        calls.append(repo_id)
-        if repo_id == "madroid/flux.1-schnell-mflux-4bit":
-            raise downloader.DownloadError("primary mirror unavailable")
-        on_progress(100, 100)
-        return downloader.DownloadResult(local_path=destination)
-
-    monkeypatch.setattr(downloader, "download", fake_download)
-
-    cmd = protocol.DownloadCommand(id="dl-1", model="flux1-schnell-4bit")
-    srv.handle(cmd, emit)
-
-    assert calls == ["madroid/flux.1-schnell-mflux-4bit", "dhairyashil/FLUX.1-schnell-mflux-4bit"]
-    assert events[-1]["type"] == "download_complete"
-
-
-def test_download_error_when_all_mirrors_fail(tmp_path, monkeypatch, collected_events):
-    events, emit = collected_events
-    srv = server_module.Server(weights_cache_root=tmp_path / "models")
-
-    def always_fails(repo_id, destination, on_progress, cancel_event):
+    def fails_midway(repo_id, destination, on_progress, cancel_event):
+        destination.mkdir(parents=True, exist_ok=True)
+        (destination / "partial.safetensors").write_bytes(b"x")
         raise downloader.DownloadError(f"{repo_id} unreachable")
 
-    monkeypatch.setattr(downloader, "download", always_fails)
+    monkeypatch.setattr(downloader, "download", fails_midway)
 
-    cmd = protocol.DownloadCommand(id="dl-1", model="sd35-large-4bit")  # no fallback repo
-    srv.handle(cmd, emit)
+    srv.handle(protocol.DownloadCommand(id="dl-1", model="z-image-turbo-4bit"), emit)
 
     assert events[-1]["type"] == "error"
     assert events[-1]["code"] == "download_failed"
+    assert not (srv.weights_dir("z-image-turbo-4bit") / server_module.DOWNLOAD_COMPLETE_MARKER).exists()
+
+
+def test_partial_download_is_not_treated_as_downloaded(tmp_path, monkeypatch, collected_events):
+    events, emit = collected_events
+    srv = server_module.Server(weights_cache_root=tmp_path / "models")
+    weights_dir = srv.weights_dir("flux1-schnell-4bit")
+    weights_dir.mkdir(parents=True)
+    (weights_dir / "partial.safetensors").write_bytes(b"x")  # files present, no marker
+
+    cmd = protocol.GenerateCommand(
+        id="req-1", model="flux1-schnell-4bit", prompt="x", negative_prompt="",
+        steps=1, guidance=1.0, seed=1, width=64, height=64, batch_size=1,
+        output_dir=str(tmp_path / "out"),
+    )
+    srv.handle(cmd, emit)
+
+    assert [e["code"] for e in events] == ["model_not_downloaded"]
